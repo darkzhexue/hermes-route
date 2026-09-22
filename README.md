@@ -14,7 +14,7 @@ Hermes Agent 没有内置的"一行切换模型"。`model.default` 只接受**�
 ## 安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<you>/hermes-route/main/hermes-route.py \
+curl -fsSL https://raw.githubusercontent.com/darkzhexue/hermes-route/main/hermes-route.py \
   -o ~/.local/bin/hermes-route
 chmod +x ~/.local/bin/hermes-route
 ```

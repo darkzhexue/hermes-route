@@ -11,6 +11,11 @@ Hermes Agent 没有内置的"一行切换模型"。`model.default` 只接受**�
 
 `hermes-route` 把这些步骤合成一条命令。
 
+它还会一并切换 **`model.context_length`（上下文窗口）** 和 **`model.max_tokens`（最大输出）**。
+这两个键在本版本里是**全局单值、没有 per-model 写法**（优先级 `ephemeral > model.max_tokens > provider profile`），
+所以切到上限不同的模型时它们不会自己变：切到上限更小的模型会 400，切到上限更大的模型白白砍输出；
+窗口比当前值小的时候更隐蔽——压缩按 `threshold × context_length` 触发，窗口写大了压缩就永远来不及。
+
 ## 安装
 
 ```bash
@@ -25,21 +30,25 @@ chmod +x ~/.local/bin/hermes-route
 ## 用法
 
 ```bash
-hermes-route --list                  # 列出可用别名及各自路由
-hermes-route --show                  # 当前 model 段 + 各 cron 任务的钉选
-hermes-route glm53flash              # 切换（改 4 键 + 重钉 cron + 端到端验证）
+hermes-route --list                  # 列出别名、各自路由与已知的窗口/上限
+hermes-route --show                  # 当前模型/路由/窗口/上限 + 各 cron 任务的钉选
+hermes-route glm53flash              # 切换（写全部相关键 + 重钉 cron + 端到端验证）
 hermes-route mimo                    # 切回
 hermes-route mimo-v2.6-pro           # 字面 id：同端点内换模型，保持当前路由
 hermes-route glm53flash --dry-run    # 只打印将执行的动作，不写任何文件
-hermes-route <名> [--no-cron] [--no-verify] [--force]
+hermes-route <名> [--no-cron] [--no-limits] [--force]
+
+hermes-route --set-limits <别名> --context 1000000 --max-tokens 131072   # 记录窗口/上限
+hermes-route --forget-limits <别名>                                       # 删除记录
 ```
 
-一条命令会做四件事：
+一条命令会做五件事：
 
 1. 从 `model_aliases:` 的 **dict 形式**别名解析出完整路由（model/provider/base_url/key_env）；
 2. 用 `hermes config set` 改写四个键（**不手改 YAML**）；
-3. 用 `hermes cron edit` 重新钉选每个启用的 cron 任务；
-4. 跑一次真实的 `hermes -z` 端到端验证。
+3. 若该模型有窗口/上限记录，一并改写 `model.context_length` / `model.max_tokens`；
+4. 用 `hermes cron edit` 重新钉选每个启用的 cron 任务；
+5. 跑一次真实的 `hermes -z` 端到端验证。
 
 **验证失败会自动回滚** `config.yaml` 与 `cron/jobs.json` 两处并返回退出码 1。
 
@@ -62,6 +71,36 @@ hermes config set model_aliases.glm53flash \
 > 别用 `model.aliases` 的**字符串**形式：它无法表达带 `/` 的模型 id
 > （值会被按第一个 `/` 拆成 provider/model），且没有 `key_env` 时会沿用当前
 > provider 的密钥，可能把密钥发往无关端点（上游 issue #83612）。
+
+## 窗口/上限表
+
+记在 `~/.hermes/hermes-route.json`——**工具私有，Hermes 不读**：
+
+```json
+{
+  "limits": {
+    "mimo-v2.6-flash":         {"context_length": 1000000, "max_tokens": 131072},
+    "glm-5.3-flash":           {"context_length": 1000000, "max_tokens": 131072},
+    "deepseek/deepseek-flash": {"context_length": 1000000, "max_tokens": 393216}
+  }
+}
+```
+
+**按模型 id 索引，不按别名名**——数值属于"模型+端点"，两个别名指向同一模型时自然共享，
+`hermes-route <字面模型id>` 这种用法也能查到。
+
+为什么不塞进 `model_aliases` 的别名条目里：那是 **Hermes 的 schema**，而常见的"加一条别名"
+配方是按固定字段写的 `hermes config set model_aliases.X '{...}'`——编辑一次就会把额外字段整个覆盖掉。
+
+**查不到的模型不猜**：保持现有的 `context_length` / `max_tokens` 不动，并打印
+
+```
+⚠ 该模型无窗口/上限记录：保持现有 context_length=1000000 / max_tokens=131072
+   补记录：hermes-route --set-limits <模型id> --context N --max-tokens N
+```
+
+之所以不猜（也不自动取所有已知路线的最小值），是因为静默砍输出或提前压缩这种代价，
+末尾那次真实请求验证**兜不住**；而"窗口/上限写错导致 400"这种情况验证能撞出来并自动回滚。
 
 ## 生效范围
 
